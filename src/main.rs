@@ -1,5 +1,6 @@
 #![feature(string_remove_matches)]
 
+use core::panic;
 use std::{
     env::args,
     fs::File,
@@ -13,6 +14,10 @@ fn get_loop_closing_index(instructions: &[char], open_loop_index: usize) -> usiz
     let mut i = open_loop_index;
 
     loop {
+        if i >= instructions.len() {
+            panic!("Failed to find closing bracket");
+        }
+
         if instructions[i] == '[' {
             loop_depth += 1;
         }
@@ -32,10 +37,12 @@ fn get_loop_closing_index(instructions: &[char], open_loop_index: usize) -> usiz
 
 fn main() {
     let args: Vec<_> = args().collect();
-    let mut file = File::open(&args[1]).unwrap();
+    let mut file = File::open(args.get(1).expect("Please supply a file argument"))
+        .expect("Failed to open file");
     let mut contents = String::new();
 
-    file.read_to_string(&mut contents).unwrap();
+    file.read_to_string(&mut contents)
+        .expect("Failed to read file");
 
     contents.remove_matches(|c: char| !VALID_CHARS.contains(&c));
     let instructions: Vec<char> = contents.chars().collect();
@@ -47,7 +54,8 @@ fn main() {
     let mut stdout = io::stdout();
 
     loop {
-        if pc >= contents.len() {
+        if pc >= instructions.len() {
+            stdout.flush().expect("Failed to flush stdout");
             break;
         }
 
@@ -61,7 +69,13 @@ fn main() {
                     data.push(0);
                 }
             }
-            '<' => ptr -= 1,
+            '<' => {
+                if ptr == 0 {
+                    panic!("Cannot have a negative pointer");
+                }
+
+                ptr -= 1;
+            }
             '[' => {
                 let loop_bounds = (pc, get_loop_closing_index(&instructions, pc));
 
@@ -75,22 +89,21 @@ fn main() {
                 if data[ptr] == 0 {
                     loops.pop();
                 } else {
-                    pc = loops.last().unwrap().0;
+                    pc = loops.last().expect("Extra ']' Found").0;
                 }
             }
             ',' => {
                 let input;
+                stdout.flush().expect("Failed to flush stdout");
 
                 unsafe {
                     input = libc::getchar();
                 }
 
-                data[ptr] = input.try_into().expect("Invalid Input!");
+                data[ptr] = input.try_into().expect("Invalid Input");
             }
             '.' => {
-                let out = char::from_u32(data[ptr] as u32).unwrap();
-                print!("{out}");
-                stdout.flush().unwrap();
+                print!("{}", data[ptr] as u8 as char);
             }
             other => {
                 panic!("Invalid Instruction {other}");
