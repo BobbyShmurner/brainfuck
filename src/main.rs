@@ -242,6 +242,29 @@ fn compile(instructions: &[char], module_name: &str) {
     let ptr = builder.build_alloca(i64_type, "");
     builder.build_store(ptr, i64_type.const_zero());
 
+    // Debug Stuff
+    let ptr_val = builder.build_load(i64_type, ptr, "").into_int_value();
+    let data_offset = unsafe { builder.build_gep(i8_type, data, &[ptr_val], "") };
+
+    let current_val = builder
+        .build_load(i8_type, data_offset, "")
+        .into_int_value();
+
+    builder.build_call(
+        printf,
+        &[
+            builder
+                .build_global_string_ptr("Index: %d\nData: %p\nOffset: %p\nValue: %d\n", "")
+                .as_pointer_value()
+                .into(),
+            ptr_val.into(),
+            data.into(),
+            data_offset.into(),
+            current_val.into(),
+        ],
+        "",
+    );
+
     // for instruction in instructions {
     //     match instruction {
     //         '+' => {
