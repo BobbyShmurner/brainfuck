@@ -9,9 +9,11 @@ use std::{
 };
 
 use inkwell::{
+    builder::Builder,
     context::Context,
     module::{Linkage, Module},
     targets::*,
+    types::BasicType,
     values::IntValue,
     AddressSpace, IntPredicate, OptimizationLevel,
 };
@@ -75,7 +77,7 @@ fn interperate(instructions: &[char]) {
                 ptr -= 1;
             }
             '[' => {
-                let loop_bounds = (pc, get_loop_closing_index(&instructions, pc));
+                let loop_bounds = (pc, get_loop_closing_index(instructions, pc));
 
                 if data[ptr] == 0 {
                     pc = loop_bounds.1;
@@ -152,8 +154,9 @@ fn compile(instructions: &[char], module_name: &str) {
     let i64_type = context.i64_type();
     let void_type = context.void_type();
 
-    let data_contents_type = context.i8_type();
+    let data_contents_type = i8_type;
     let data_type = data_contents_type.ptr_type(AddressSpace::default());
+    let ptr_type = i64_type;
 
     // #define DATA_SIZE 30000;
     let data_size = i32_type.const_int(30_000, false);
@@ -166,11 +169,9 @@ fn compile(instructions: &[char], module_name: &str) {
     let getchar_type = i32_type.fn_type(&[], true);
     let getchar = module.add_function("getchar", getchar_type, Some(Linkage::External));
 
-    // int main() {}
-    let main_type = i32_type.fn_type(&Vec::new(), false);
-    let main_func = module.add_function("main", main_type, None);
-
-    let main_block = context.append_basic_block(main_func, "");
+    // Link to exit
+    let exit_type = void_type.fn_type(&[], true);
+    let exit = module.add_function("exit", exit_type, Some(Linkage::External));
 
     // -- Zero Out Data --
 
@@ -228,103 +229,179 @@ fn compile(instructions: &[char], module_name: &str) {
         builder.build_return(None);
     }
 
-    // -- MAIN --
-    builder.position_at_end(main_block);
-
-    // char data[DATA_SIZE];
-    let data = builder
-        .build_array_malloc(data_contents_type, data_size, "")
-        .unwrap();
-
-    builder.build_call(zero_data, &[data.into()], "");
-
-    // long ptr = 0;
-    let ptr = builder.build_alloca(i64_type, "");
-    builder.build_store(ptr, i64_type.const_zero());
-
-    // Debug Stuff
-    let ptr_val = builder.build_load(i64_type, ptr, "").into_int_value();
-    let data_offset = unsafe { builder.build_gep(i8_type, data, &[ptr_val], "") };
-
-    let current_val = builder
-        .build_load(i8_type, data_offset, "")
-        .into_int_value();
-
-    builder.build_call(
-        printf,
+    // void panic(const char* reason, int code) {}
+    let panic_type = void_type.fn_type(
         &[
-            builder
-                .build_global_string_ptr("Index: %d\nData: %p\nOffset: %p\nValue: %d\n", "")
-                .as_pointer_value()
-                .into(),
-            ptr_val.into(),
-            data.into(),
-            data_offset.into(),
-            current_val.into(),
+            i8_type.ptr_type(AddressSpace::default()).into(),
+            i32_type.into(),
         ],
-        "",
+        true,
     );
+    let panic = module.add_function("panic", panic_type, None);
+    let panic_block = context.append_basic_block(panic, "");
 
-    // for instruction in instructions {
-    //     match instruction {
-    //         '+' => {
-    //             let ptr_val = builder.build_load(i64_type, ptr, "").into_int_value();
-    //             let data_offset = unsafe { builder.build_gep(i8_type, data, &[ptr_val], "") };
+    // -- PANIC --
+    {
+        builder.position_at_end(panic_block);
 
-    //             let current_val = builder.build_load(i8_type, data_offset, "");
-    //         }
-    //         // '-' => data[ptr] -= 1,
-    //         // '>' => {
-    //         //     ptr += 1;
+        let reason = panic.get_nth_param(0).unwrap().into_pointer_value();
+        let code = panic.get_nth_param(1).unwrap().into_int_value();
 
-    //         //     if ptr >= data.len() {
-    //         //         data.push(0);
-    //         //     }
-    //         // }
-    //         // '<' => {
-    //         //     if ptr == 0 {
-    //         //         panic!("Cannot have a negative pointer");
-    //         //     }
+        builder.build_call(
+            printf,
+            &[
+                builder
+                    .build_global_string_ptr("Panic!!!! Error Code %d: %s\n", "")
+                    .as_pointer_value()
+                    .into(),
+                code.into(),
+                reason.into(),
+            ],
+            "",
+        );
 
-    //         //     ptr -= 1;
-    //         // }
-    //         // '[' => {
-    //         //     let loop_bounds = (pc, get_loop_closing_index(&instructions, pc));
+        builder.build_call(exit, &[code.into()], "");
+        builder.build_return(None);
+    }
 
-    //         //     if data[ptr] == 0 {
-    //         //         pc = loop_bounds.1;
-    //         //     } else {
-    //         //         loops.push(loop_bounds);
-    //         //     }
-    //         // }
-    //         // ']' => {
-    //         //     if data[ptr] == 0 {
-    //         //         loops.pop();
-    //         //     } else {
-    //         //         pc = loops.last().expect("Extra ']' Found").0;
-    //         //     }
-    //         // }
-    //         // ',' => {
-    //         //     let input;
-    //         //     stdout.flush().expect("Failed to flush stdout");
+    // int main() {}
+    let main_type = i32_type.fn_type(&[], true);
+    let main = module.add_function("main", main_type, None);
 
-    //         //     unsafe {
-    //         //         input = libc::getchar();
-    //         //     }
+    let main_block = context.append_basic_block(main, "");
 
-    //         //     data[ptr] = input.try_into().expect("Invalid Input");
-    //         // }
-    //         // '.' => {
-    //         //     print!("{}", data[ptr] as u8 as char);
-    //         // }
-    //         other => {
-    //             panic!("Invalid Instruction {other}");
-    //         }
-    //     }
-    // }
+    // -- MAIN --
+    {
+        builder.position_at_end(main_block);
 
-    // return 0;
-    builder.build_return(Some(&context.i32_type().const_zero()));
+        // char data[DATA_SIZE];
+        let data = builder
+            .build_array_malloc(data_contents_type, data_size, "")
+            .unwrap();
+
+        builder.build_call(zero_data, &[data.into()], "");
+
+        // long ptr = 0;
+        let ptr = builder.build_alloca(ptr_type, "");
+        builder.build_store(ptr, ptr_type.const_zero());
+
+        builder.build_call(
+            panic,
+            &[
+                builder
+                    .build_global_string_ptr("Panic Test :)", "")
+                    .as_pointer_value()
+                    .into(),
+                i32_type.const_int(69, false).into(),
+            ],
+            "Panic Test",
+        );
+
+        for instruction in instructions {
+            match instruction {
+                '+' => {
+                    // -- Increment value at pointer --
+
+                    let ptr_val = builder.build_load(ptr_type, ptr, "").into_int_value();
+                    let data_offset =
+                        unsafe { builder.build_gep(data_contents_type, data, &[ptr_val], "") };
+
+                    let current_val = builder
+                        .build_load(data_contents_type, data_offset, "")
+                        .into_int_value();
+                    let new_val = builder.build_int_add(
+                        current_val,
+                        data_contents_type.const_int(1, true),
+                        "",
+                    );
+
+                    builder.build_store(data_offset, new_val);
+                }
+                '-' => {
+                    // -- Decrement value at pointer --
+
+                    let ptr_val = builder.build_load(ptr_type, ptr, "").into_int_value();
+                    let data_offset =
+                        unsafe { builder.build_gep(data_contents_type, data, &[ptr_val], "") };
+
+                    let current_val = builder
+                        .build_load(data_contents_type, data_offset, "")
+                        .into_int_value();
+                    let new_val = builder.build_int_sub(
+                        current_val,
+                        data_contents_type.const_int(1, true),
+                        "",
+                    );
+
+                    builder.build_store(data_offset, new_val);
+                }
+                '>' => {
+                    // -- Increment Pointer --
+                }
+                // '<' => {
+                //     if ptr == 0 {
+                //         panic!("Cannot have a negative pointer");
+                //     }
+
+                //     ptr -= 1;
+                // }
+                // '[' => {
+                //     let loop_bounds = (pc, get_loop_closing_index(&instructions, pc));
+
+                //     if data[ptr] == 0 {
+                //         pc = loop_bounds.1;
+                //     } else {
+                //         loops.push(loop_bounds);
+                //     }
+                // }
+                // ']' => {
+                //     if data[ptr] == 0 {
+                //         loops.pop();
+                //     } else {
+                //         pc = loops.last().expect("Extra ']' Found").0;
+                //     }
+                // }
+                // ',' => {
+                //     let input;
+                //     stdout.flush().expect("Failed to flush stdout");
+
+                //     unsafe {
+                //         input = libc::getchar();
+                //     }
+
+                //     data[ptr] = input.try_into().expect("Invalid Input");
+                // }
+                '.' => {
+                    // -- Print --
+
+                    let ptr_val = builder.build_load(ptr_type, ptr, "").into_int_value();
+                    let data_offset =
+                        unsafe { builder.build_gep(data_contents_type, data, &[ptr_val], "") };
+
+                    let current_val = builder.build_load(data_contents_type, data_offset, "");
+
+                    builder.build_call(
+                        printf,
+                        &[
+                            builder
+                                .build_global_string_ptr("%c", "")
+                                .as_pointer_value()
+                                .into(),
+                            current_val.into_int_value().into(),
+                        ],
+                        "",
+                    );
+                }
+                other => {
+                    // panic!("Invalid Instruction {other}");
+                    continue;
+                }
+            }
+        }
+
+        // return 0;
+        builder.build_return(Some(&context.i32_type().const_zero()));
+    }
 
     compile_module(&module);
 }
