@@ -1,6 +1,5 @@
 #![feature(string_remove_matches)]
 
-use core::panic;
 use std::{
     env::args,
     fs::File,
@@ -19,6 +18,7 @@ use inkwell::{
 };
 
 static VALID_CHARS: [char; 8] = ['+', '-', '<', '>', '[', ']', ',', '.'];
+static DATA_SIZE: u64 = 30_000;
 
 fn get_loop_closing_index(instructions: &[char], open_loop_index: usize) -> usize {
     let mut loop_depth = 0;
@@ -159,7 +159,7 @@ fn compile(instructions: &[char], module_name: &str) {
     let ptr_type = i64_type;
 
     // #define DATA_SIZE 30000;
-    let data_size = i32_type.const_int(30_000, false);
+    let data_size = i32_type.const_int(DATA_SIZE, false);
 
     // Link to printf
     let printf_type = i32_type.fn_type(&[i8_type.ptr_type(AddressSpace::default()).into()], true);
@@ -172,6 +172,24 @@ fn compile(instructions: &[char], module_name: &str) {
     // Link to exit
     let exit_type = void_type.fn_type(&[], true);
     let exit = module.add_function("exit", exit_type, Some(Linkage::External));
+
+    // -- Printf --
+
+    macro_rules! build_printf {
+        ($format:literal, $($vars:tt),*) => {
+            builder.build_call(
+                printf,
+                &[
+                    builder
+                        .build_global_string_ptr($format, "")
+                        .as_pointer_value()
+                        .into(),
+                    $($vars.into(),)*
+                ],
+                "",
+            );
+        };
+    }
 
     // -- Zero Out Data --
 
@@ -251,7 +269,7 @@ fn compile(instructions: &[char], module_name: &str) {
             printf,
             &[
                 builder
-                    .build_global_string_ptr("Panic!!!! Error Code %d: %s\n", "")
+                    .build_global_string_ptr("Panic!!!!\nError Code %d: %s\n", "")
                     .as_pointer_value()
                     .into(),
                 code.into(),
@@ -264,11 +282,59 @@ fn compile(instructions: &[char], module_name: &str) {
         builder.build_return(None);
     }
 
+    macro_rules! build_panic {
+        ($code:literal, $($reason:tt)*) => {
+            let code: IntValue = i32_type.const_int($code, false);
+
+            builder.build_call(
+                panic,
+                &[
+                    builder
+                        .build_global_string_ptr(&$($reason)*, "")
+                        .as_pointer_value()
+                        .into(),
+                    code.into(),
+                ],
+                "",
+            );
+            builder.build_return(Some(&code));
+        }
+    }
+
+    // macro_rules! build_panic_block {
+    //     ($name:literal, $code:literal, $($reason:tt)*) => {
+    //         {
+    //         let fn_type = void_type.fn_type(&[], true);
+    //         let panic_fn = module.add_function($name, fn_type, None);
+
+    //         let block = context.append_basic_block(panic_fn, "");
+    //         builder.position_at_end(block);
+
+    //         build_panic!($code, $($reason)*);
+
+    //         block
+    //         }
+    //     };
+    // }
+
     // int main() {}
     let main_type = i32_type.fn_type(&[], true);
     let main = module.add_function("main", main_type, None);
 
     let main_block = context.append_basic_block(main, "");
+
+    // // Panic Blocks
+    // let panic_ptr_overflow = build_panic_block!(
+    //     "panic_ptr_overflow",
+    //     1,
+    //     format!("Pointer Overflow - Data pointer must be less than {DATA_SIZE}")
+    // );
+
+    // let panic_ptr_underflow = build_panic_block!(
+    //     "panic_ptr_underflow",
+    //     2,
+    //     "Pointer Underflow - Data pointer must be greater than 0"
+    // );
 
     // -- MAIN --
     {
@@ -284,18 +350,6 @@ fn compile(instructions: &[char], module_name: &str) {
         // long ptr = 0;
         let ptr = builder.build_alloca(ptr_type, "");
         builder.build_store(ptr, ptr_type.const_zero());
-
-        builder.build_call(
-            panic,
-            &[
-                builder
-                    .build_global_string_ptr("Panic Test :)", "")
-                    .as_pointer_value()
-                    .into(),
-                i32_type.const_int(69, false).into(),
-            ],
-            "Panic Test",
-        );
 
         for instruction in instructions {
             match instruction {
@@ -337,40 +391,39 @@ fn compile(instructions: &[char], module_name: &str) {
                 }
                 '>' => {
                     // -- Increment Pointer --
+
+                    let ptr_val = builder.build_load(ptr_type, ptr, "").into_int_value();
+                    let ptr_val = builder.build_int_add(ptr_val, ptr_type.const_int(1, false), "");
+
+                    builder.build_store(ptr, ptr_val);
                 }
-                // '<' => {
-                //     if ptr == 0 {
-                //         panic!("Cannot have a negative pointer");
-                //     }
+                '<' => {
+                    // -- Decrement Pointer --
 
-                //     ptr -= 1;
-                // }
-                // '[' => {
-                //     let loop_bounds = (pc, get_loop_closing_index(&instructions, pc));
+                    let ptr_val = builder.build_load(ptr_type, ptr, "").into_int_value();
+                    let ptr_val = builder.build_int_sub(ptr_val, ptr_type.const_int(1, false), "");
 
-                //     if data[ptr] == 0 {
-                //         pc = loop_bounds.1;
-                //     } else {
-                //         loops.push(loop_bounds);
-                //     }
-                // }
-                // ']' => {
-                //     if data[ptr] == 0 {
-                //         loops.pop();
-                //     } else {
-                //         pc = loops.last().expect("Extra ']' Found").0;
-                //     }
-                // }
-                // ',' => {
-                //     let input;
-                //     stdout.flush().expect("Failed to flush stdout");
+                    builder.build_store(ptr, ptr_val);
+                }
+                '[' => {
+                    // -- Open Loop --
+                }
+                ']' => {
+                    // -- Close Loop --
+                }
+                ',' => {
+                    // -- Get Input And Store At Pointer --
 
-                //     unsafe {
-                //         input = libc::getchar();
-                //     }
+                    let input = builder.build_call(getchar, &[], "");
+                    let input = input.try_as_basic_value().left().unwrap().into_int_value();
+                    let casted_input = builder.build_int_cast(input, i8_type, "");
 
-                //     data[ptr] = input.try_into().expect("Invalid Input");
-                // }
+                    let ptr_val = builder.build_load(ptr_type, ptr, "").into_int_value();
+                    let data_offset =
+                        unsafe { builder.build_gep(data_contents_type, data, &[ptr_val], "") };
+
+                    builder.build_store(data_offset, casted_input);
+                }
                 '.' => {
                     // -- Print --
 
@@ -378,29 +431,18 @@ fn compile(instructions: &[char], module_name: &str) {
                     let data_offset =
                         unsafe { builder.build_gep(data_contents_type, data, &[ptr_val], "") };
 
-                    let current_val = builder.build_load(data_contents_type, data_offset, "");
+                    let current_val = builder
+                        .build_load(data_contents_type, data_offset, "")
+                        .into_int_value();
 
-                    builder.build_call(
-                        printf,
-                        &[
-                            builder
-                                .build_global_string_ptr("%c", "")
-                                .as_pointer_value()
-                                .into(),
-                            current_val.into_int_value().into(),
-                        ],
-                        "",
-                    );
+                    build_printf!("%c", current_val);
                 }
-                other => {
-                    // panic!("Invalid Instruction {other}");
-                    continue;
-                }
+                other => panic!("Invalid Instruction {other}"),
             }
         }
 
         // return 0;
-        builder.build_return(Some(&context.i32_type().const_zero()));
+        builder.build_return(Some(&i32_type.const_zero()));
     }
 
     compile_module(&module);
