@@ -2,7 +2,6 @@
 
 use std::{
     env::args,
-    fmt::format,
     fs::File,
     io::{self, Read, Write},
     path::Path,
@@ -46,7 +45,7 @@ fn get_loop_closing_index(instructions: &[char], open_loop_index: usize) -> usiz
     i
 }
 
-fn interperate(instructions: &[char]) {
+fn interpreter(instructions: &[char]) {
     let mut data: Vec<i8> = vec![0];
     let mut loops: Vec<(usize, usize)> = Vec::new();
     let mut ptr: usize = 0;
@@ -219,7 +218,10 @@ fn compile(instructions: &[char], module_name: &str) {
             printf,
             &[
                 builder
-                    .build_global_string_ptr("Panic!!!!\nError Code %d: %s\n", "")
+                    .build_global_string_ptr(
+                        "\n----------------------------------- Panic!!!! ----------------------------------\nError Code %d: %s\n--------------------------------------------------------------------------------\n",
+                        "",
+                    )
                     .as_pointer_value()
                     .into(),
                 code.into(),
@@ -396,9 +398,9 @@ fn compile(instructions: &[char], module_name: &str) {
                     );
 
                     let assert_condition = builder.build_int_compare(
-                        IntPredicate::SLE,
+                        IntPredicate::NE,
                         new_val,
-                        data_contents_type.const_int(127, true),
+                        data_contents_type.const_int(128, true),
                         "",
                     );
 
@@ -423,9 +425,9 @@ fn compile(instructions: &[char], module_name: &str) {
                     );
 
                     let assert_condition = builder.build_int_compare(
-                        IntPredicate::SGE,
+                        IntPredicate::NE,
                         new_val,
-                        data_contents_type.const_int(128, true),
+                        data_contents_type.const_int(127, true),
                         "",
                     );
 
@@ -549,6 +551,10 @@ fn compile(instructions: &[char], module_name: &str) {
             }
         }
 
+        if !loop_blocks.is_empty() {
+            panic!("Missing Closing Bracket");
+        }
+
         // return 0;
         builder.build_return(Some(&i32_type.const_zero()));
     }
@@ -557,15 +563,19 @@ fn compile(instructions: &[char], module_name: &str) {
 }
 
 fn main() {
-    let args: Vec<_> = args().collect();
-    let module_name = match args.get(2) {
-        Some(val) => val.as_str(),
-        None => "bf_mod",
-    };
+    let mut args: Vec<_> = args().collect();
 
-    let mut file = File::open(args.get(1).expect("Please supply an input file argument"))
-        .expect("Failed to open file");
+    let interpret = args.contains(&"-i".to_owned());
+    args.retain(|x| *x != "-i");
+
+    let file_name = args.get(1).expect("Please supply an input file argument");
+    let mut file = File::open(file_name).expect("Failed to open file");
     let mut contents = String::new();
+
+    let module_name = match args.get(2) {
+        Some(val) => val.to_owned(),
+        None => file_name.replace(".b", ""),
+    };
 
     file.read_to_string(&mut contents)
         .expect("Failed to read file");
@@ -573,6 +583,9 @@ fn main() {
     contents.remove_matches(|c: char| !VALID_CHARS.contains(&c));
     let instructions: Vec<char> = contents.chars().collect();
 
-    // interperate(&instructions);
-    compile(&instructions, module_name);
+    if interpret {
+        interpreter(&instructions);
+    } else {
+        compile(&instructions, &module_name);
+    }
 }

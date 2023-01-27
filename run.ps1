@@ -6,10 +6,11 @@ if ($LASTEXITCODE -ne 0) {
 	exit
 }
 
-Start-Process -NoNewWindow -FilePath "clang" -ArgumentList "$out.o -o $out.exe" -Wait
-if ($LASTEXITCODE -ne 0) {
+$process = Start-Process -NoNewWindow -FilePath "clang" -ArgumentList "`"$out.o`" -o `"$out.exe`"" -PassThru -Wait
+if ($process.ExitCode -ne 0) {
+	Write-Host "Clang exited with code " $process.ExitCode
 	exit
 }
 
-Start-Process -NoNewWindow -FilePath "./$out.exe" -Wait
-echo "Exited with code $LASTEXITCODE"
+$process = Start-Process -NoNewWindow -FilePath "./$out.exe" -PassThru -Wait
+Write-Host "Exited with code " $process.ExitCode
