@@ -8,17 +8,71 @@ use std::{
 };
 
 use inkwell::{
+    basic_block::BasicBlock,
     builder::Builder,
     context::Context,
     module::{Linkage, Module},
     targets::*,
-    types::BasicType,
-    values::IntValue,
+    types::{BasicType, FunctionType},
+    values::{FunctionValue, IntValue},
     AddressSpace, IntPredicate, OptimizationLevel,
 };
 
 static VALID_CHARS: [char; 8] = ['+', '-', '<', '>', '[', ']', ',', '.'];
 static DATA_SIZE: u64 = 30_000;
+
+struct Loop<'a> {
+    entry_block: BasicBlock<'a>,
+    loop_block: BasicBlock<'a>,
+    exit_block: BasicBlock<'a>,
+    builder: &'a Builder<'a>,
+    context: &'a Context,
+}
+
+// impl<'a> Loop<'a> {
+//     fn new(context: &'a Context, builder: &'a Builder<'a>, function: FunctionValue<'a>, inside_loop: fn()) -> Self {
+//         let loop_block = context.append_basic_block(function, "loop");
+//         let exit_block = context.append_basic_block(function, "exit");
+
+//         // Types
+//         let i32_type = context.i32_type();
+
+//         // Goto Loop
+//         builder.build_unconditional_branch(self.loop_block);
+
+//         // -- Loop --
+//         builder.position_at_end(self.loop_block);
+
+//         loop_fn(builder, context, i_val);
+
+//         // Step i;
+//         let i_val = builder.build_int_add(i_val, i32_type.const_int(self.step, false), "");
+//         builder.build_store(i, i_val);
+
+//         // if i < DATA_SIZE Goto Loop else Goto Break
+//         builder.build_conditional_branch(
+//             builder.build_int_compare(IntPredicate::ULT, i_val, data_size, ""),
+//             loop_block,
+//             break_block,
+//         );
+
+//         // -- Break --
+//         builder.position_at_end(break_block);
+
+//         // return;
+//         builder.build_return(None);
+
+//         self.builder.position_at_end(self.loop_block);
+//         loop_fn(self.builder);
+//         self.builder.build_un
+
+//         self.builder.position_at_end(self.exit_block);
+//     }
+
+//     fn build_loop(&self, loop_fn: fn(&'a Builder<'a>, &'a Context, IntValue)) {
+
+//     }
+// }
 
 fn get_loop_closing_index(instructions: &[char], open_loop_index: usize) -> usize {
     let mut loop_depth = 0;
@@ -191,62 +245,6 @@ fn compile(instructions: &[char], module_name: &str) {
         };
     }
 
-    // -- Zero Out Data --
-
-    // void zero_data(char* data) {}
-    let zero_data = module.add_function(
-        "zero_data",
-        void_type.fn_type(&[data_type.into()], true),
-        None,
-    );
-
-    {
-        let entry_block = context.append_basic_block(zero_data, "entry");
-        let loop_block = context.append_basic_block(zero_data, "loop");
-        let break_block = context.append_basic_block(zero_data, "break");
-        let data = zero_data.get_first_param().unwrap();
-
-        // -- Entry --
-        builder.position_at_end(entry_block);
-
-        // int i = 0
-        let i = builder.build_alloca(i32_type, "");
-        builder.build_store(i, i32_type.const_zero());
-
-        // Goto Loop
-        builder.build_unconditional_branch(loop_block);
-
-        // -- Loop --
-        builder.position_at_end(loop_block);
-
-        let i_val = builder.build_load(i32_type, i, "").into_int_value();
-
-        // char* data_entry = data + i;
-        let data_entry = unsafe {
-            builder.build_gep(data_contents_type, data.into_pointer_value(), &[i_val], "")
-        };
-
-        // *data_entry = 0;
-        builder.build_store(data_entry, i32_type.const_zero());
-
-        // i = i + 1;
-        let i_val = builder.build_int_add(i_val, i32_type.const_int(1, false), "");
-        builder.build_store(i, i_val);
-
-        // if i < DATA_SIZE Goto Loop else Goto Break
-        builder.build_conditional_branch(
-            builder.build_int_compare(IntPredicate::ULT, i_val, data_size, ""),
-            loop_block,
-            break_block,
-        );
-
-        // -- Break --
-        builder.position_at_end(break_block);
-
-        // return;
-        builder.build_return(None);
-    }
-
     // void panic(const char* reason, int code) {}
     let panic_type = void_type.fn_type(
         &[
@@ -317,6 +315,62 @@ fn compile(instructions: &[char], module_name: &str) {
     //     };
     // }
 
+    // -- Zero Out Data --
+
+    // void zero_data(char* data) {}
+    let zero_data = module.add_function(
+        "zero_data",
+        void_type.fn_type(&[data_type.into()], true),
+        None,
+    );
+
+    {
+        let entry_block = context.append_basic_block(zero_data, "entry");
+        let loop_block = context.append_basic_block(zero_data, "loop");
+        let break_block = context.append_basic_block(zero_data, "break");
+        let data = zero_data.get_first_param().unwrap();
+
+        // -- Entry --
+        builder.position_at_end(entry_block);
+
+        // int i = 0
+        let i = builder.build_alloca(i32_type, "");
+        builder.build_store(i, i32_type.const_zero());
+
+        // Goto Loop
+        builder.build_unconditional_branch(loop_block);
+
+        // -- Loop --
+        builder.position_at_end(loop_block);
+
+        let i_val = builder.build_load(i32_type, i, "").into_int_value();
+
+        // char* data_entry = data + i;
+        let data_entry = unsafe {
+            builder.build_gep(data_contents_type, data.into_pointer_value(), &[i_val], "")
+        };
+
+        // *data_entry = 0;
+        builder.build_store(data_entry, i32_type.const_zero());
+
+        // i = i + 1;
+        let i_val = builder.build_int_add(i_val, i32_type.const_int(1, false), "");
+        builder.build_store(i, i_val);
+
+        // if i < DATA_SIZE Goto Loop else Goto Break
+        builder.build_conditional_branch(
+            builder.build_int_compare(IntPredicate::ULT, i_val, data_size, ""),
+            loop_block,
+            break_block,
+        );
+
+        // -- Break --
+        builder.position_at_end(break_block);
+
+        // return;
+        builder.build_return(None);
+    }
+
     // int main() {}
     let main_type = i32_type.fn_type(&[], true);
     let main = module.add_function("main", main_type, None);
@@ -339,6 +393,8 @@ fn compile(instructions: &[char], module_name: &str) {
     // -- MAIN --
     {
         builder.position_at_end(main_block);
+
+        let mut loop_blocks: Vec<(BasicBlock, BasicBlock)> = Vec::new();
 
         // char data[DATA_SIZE];
         let data = builder
@@ -407,9 +463,59 @@ fn compile(instructions: &[char], module_name: &str) {
                 }
                 '[' => {
                     // -- Open Loop --
+
+                    let loop_block = context.append_basic_block(main, "loop");
+                    let break_block = context.append_basic_block(main, "break");
+
+                    loop_blocks.push((loop_block, break_block));
+
+                    let ptr_val = builder.build_load(ptr_type, ptr, "").into_int_value();
+                    let data_offset =
+                        unsafe { builder.build_gep(data_contents_type, data, &[ptr_val], "") };
+
+                    let current_val = builder
+                        .build_load(data_contents_type, data_offset, "")
+                        .into_int_value();
+
+                    builder.build_conditional_branch(
+                        builder.build_int_compare(
+                            IntPredicate::EQ,
+                            current_val,
+                            data_contents_type.const_int(0, false),
+                            "",
+                        ),
+                        break_block,
+                        loop_block,
+                    );
+
+                    builder.position_at_end(loop_block);
                 }
                 ']' => {
                     // -- Close Loop --
+
+                    let (loop_block, break_block) =
+                        loop_blocks.pop().expect("Extra Closing Bracket");
+
+                    let ptr_val = builder.build_load(ptr_type, ptr, "").into_int_value();
+                    let data_offset =
+                        unsafe { builder.build_gep(data_contents_type, data, &[ptr_val], "") };
+
+                    let current_val = builder
+                        .build_load(data_contents_type, data_offset, "")
+                        .into_int_value();
+
+                    builder.build_conditional_branch(
+                        builder.build_int_compare(
+                            IntPredicate::EQ,
+                            current_val,
+                            data_contents_type.const_int(0, false),
+                            "",
+                        ),
+                        break_block,
+                        loop_block,
+                    );
+
+                    builder.position_at_end(break_block);
                 }
                 ',' => {
                     // -- Get Input And Store At Pointer --
