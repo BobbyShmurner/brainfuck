@@ -2,6 +2,7 @@
 
 use std::{
     env::args,
+    fmt::format,
     fs::File,
     io::{self, Read, Write},
     path::Path,
@@ -9,70 +10,15 @@ use std::{
 
 use inkwell::{
     basic_block::BasicBlock,
-    builder::Builder,
     context::Context,
     module::{Linkage, Module},
     targets::*,
-    types::{BasicType, FunctionType},
-    values::{FunctionValue, IntValue},
+    values::IntValue,
     AddressSpace, IntPredicate, OptimizationLevel,
 };
 
 static VALID_CHARS: [char; 8] = ['+', '-', '<', '>', '[', ']', ',', '.'];
 static DATA_SIZE: u64 = 30_000;
-
-struct Loop<'a> {
-    entry_block: BasicBlock<'a>,
-    loop_block: BasicBlock<'a>,
-    exit_block: BasicBlock<'a>,
-    builder: &'a Builder<'a>,
-    context: &'a Context,
-}
-
-// impl<'a> Loop<'a> {
-//     fn new(context: &'a Context, builder: &'a Builder<'a>, function: FunctionValue<'a>, inside_loop: fn()) -> Self {
-//         let loop_block = context.append_basic_block(function, "loop");
-//         let exit_block = context.append_basic_block(function, "exit");
-
-//         // Types
-//         let i32_type = context.i32_type();
-
-//         // Goto Loop
-//         builder.build_unconditional_branch(self.loop_block);
-
-//         // -- Loop --
-//         builder.position_at_end(self.loop_block);
-
-//         loop_fn(builder, context, i_val);
-
-//         // Step i;
-//         let i_val = builder.build_int_add(i_val, i32_type.const_int(self.step, false), "");
-//         builder.build_store(i, i_val);
-
-//         // if i < DATA_SIZE Goto Loop else Goto Break
-//         builder.build_conditional_branch(
-//             builder.build_int_compare(IntPredicate::ULT, i_val, data_size, ""),
-//             loop_block,
-//             break_block,
-//         );
-
-//         // -- Break --
-//         builder.position_at_end(break_block);
-
-//         // return;
-//         builder.build_return(None);
-
-//         self.builder.position_at_end(self.loop_block);
-//         loop_fn(self.builder);
-//         self.builder.build_un
-
-//         self.builder.position_at_end(self.exit_block);
-//     }
-
-//     fn build_loop(&self, loop_fn: fn(&'a Builder<'a>, &'a Context, IntValue)) {
-
-//     }
-// }
 
 fn get_loop_closing_index(instructions: &[char], open_loop_index: usize) -> usize {
     let mut loop_depth = 0;
@@ -184,15 +130,21 @@ fn compile_module(module: &Module) {
         )
         .unwrap();
 
+    let name = module.get_name().to_str().unwrap();
+
     module.set_data_layout(&machine.get_target_data().get_data_layout());
     module.set_triple(&triple);
 
     machine
-        .write_to_file(module, FileType::Assembly, Path::new("./test.asm"))
+        .write_to_file(
+            module,
+            FileType::Assembly,
+            Path::new(&format!("./{name}.asm")),
+        )
         .unwrap();
 
     machine
-        .write_to_file(module, FileType::Object, Path::new("./test.o"))
+        .write_to_file(module, FileType::Object, Path::new(&format!("./{name}.o")))
         .unwrap();
 }
 
@@ -299,21 +251,27 @@ fn compile(instructions: &[char], module_name: &str) {
         }
     }
 
-    // macro_rules! build_panic_block {
-    //     ($name:literal, $code:literal, $($reason:tt)*) => {
-    //         {
-    //         let fn_type = void_type.fn_type(&[], true);
-    //         let panic_fn = module.add_function($name, fn_type, None);
+    macro_rules! build_panic_block {
+        ($function:ident, $code:literal, $($reason:tt)*) => {
+            {
+            let block = context.append_basic_block($function, "");
+            builder.position_at_end(block);
 
-    //         let block = context.append_basic_block(panic_fn, "");
-    //         builder.position_at_end(block);
+            build_panic!($code, $($reason)*);
 
-    //         build_panic!($code, $($reason)*);
+            block
+            }
+        };
+    }
 
-    //         block
-    //         }
-    //     };
-    // }
+    macro_rules! build_assert {
+        ($function:ident, $condition:ident, $assert_block:ident) => {
+            let continue_block = context.append_basic_block($function, "");
+
+            builder.build_conditional_branch($condition, continue_block, $assert_block);
+            builder.position_at_end(continue_block);
+        };
+    }
 
     // -- Zero Out Data --
 
@@ -377,18 +335,30 @@ fn compile(instructions: &[char], module_name: &str) {
 
     let main_block = context.append_basic_block(main, "");
 
-    // // Panic Blocks
-    // let panic_ptr_overflow = build_panic_block!(
-    //     "panic_ptr_overflow",
-    //     1,
-    //     format!("Pointer Overflow - Data pointer must be less than {DATA_SIZE}")
-    // );
+    // Panic Blocks
+    let panic_ptr_overflow = build_panic_block!(
+        main,
+        1,
+        format!("Pointer Overflow - Data pointer must be less than {DATA_SIZE}")
+    );
 
-    // let panic_ptr_underflow = build_panic_block!(
-    //     "panic_ptr_underflow",
-    //     2,
-    //     "Pointer Underflow - Data pointer must be greater than 0"
-    // );
+    let panic_ptr_underflow = build_panic_block!(
+        main,
+        2,
+        "Pointer Underflow - Data pointer must be greater than 0"
+    );
+
+    let panic_value_overflow = build_panic_block!(
+        main,
+        3,
+        "Value Overflow - Data values must be between -128 and 127"
+    );
+
+    let panic_value_underflow = build_panic_block!(
+        main,
+        4,
+        "Value Underflow - Data values must be between -128 and 127"
+    );
 
     // -- MAIN --
     {
@@ -425,6 +395,15 @@ fn compile(instructions: &[char], module_name: &str) {
                         "",
                     );
 
+                    let assert_condition = builder.build_int_compare(
+                        IntPredicate::SLE,
+                        new_val,
+                        data_contents_type.const_int(127, true),
+                        "",
+                    );
+
+                    build_assert!(main, assert_condition, panic_value_overflow);
+
                     builder.build_store(data_offset, new_val);
                 }
                 '-' => {
@@ -443,6 +422,15 @@ fn compile(instructions: &[char], module_name: &str) {
                         "",
                     );
 
+                    let assert_condition = builder.build_int_compare(
+                        IntPredicate::SGE,
+                        new_val,
+                        data_contents_type.const_int(128, true),
+                        "",
+                    );
+
+                    build_assert!(main, assert_condition, panic_value_underflow);
+
                     builder.build_store(data_offset, new_val);
                 }
                 '>' => {
@@ -451,6 +439,11 @@ fn compile(instructions: &[char], module_name: &str) {
                     let ptr_val = builder.build_load(ptr_type, ptr, "").into_int_value();
                     let ptr_val = builder.build_int_add(ptr_val, ptr_type.const_int(1, false), "");
 
+                    let assert_condition =
+                        builder.build_int_compare(IntPredicate::ULT, ptr_val, data_size, "");
+
+                    build_assert!(main, assert_condition, panic_ptr_overflow);
+
                     builder.build_store(ptr, ptr_val);
                 }
                 '<' => {
@@ -458,6 +451,15 @@ fn compile(instructions: &[char], module_name: &str) {
 
                     let ptr_val = builder.build_load(ptr_type, ptr, "").into_int_value();
                     let ptr_val = builder.build_int_sub(ptr_val, ptr_type.const_int(1, false), "");
+
+                    let assert_condition = builder.build_int_compare(
+                        IntPredicate::UGE,
+                        ptr_val,
+                        ptr_type.const_zero(),
+                        "",
+                    );
+
+                    build_assert!(main, assert_condition, panic_ptr_underflow);
 
                     builder.build_store(ptr, ptr_val);
                 }
