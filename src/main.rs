@@ -127,12 +127,13 @@ fn compile_module(module: &Module) {
             "generic",
             "",
             OptimizationLevel::Aggressive,
-            RelocMode::Default,
+            RelocMode::DynamicNoPic,
             CodeModel::Small,
         )
         .unwrap();
 
-    let name = module.get_name().to_str().unwrap();
+    // let name = module.get_name().to_str().unwrap();
+    let name = "Tic-Tac-Toe";
 
     module.set_data_layout(&machine.get_target_data().get_data_layout());
     module.set_triple(&triple);
