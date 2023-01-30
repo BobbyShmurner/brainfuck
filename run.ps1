@@ -1,7 +1,7 @@
 $file = $args[0]
 $out = $args[1]
 
-cargo run $file $out
+cargo run --release $file $out
 if ($LASTEXITCODE -ne 0) {
 	exit
 }

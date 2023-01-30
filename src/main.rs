@@ -116,16 +116,19 @@ fn interpreter(instructions: &[char]) {
 fn compile_module(module: &Module) {
     Target::initialize_all(&InitializationConfig::default());
 
-    let triple = TargetMachine::get_default_triple();
-    let target = Target::from_triple(&triple).unwrap();
+    // let triple = TargetMachine::get_default_triple();
+    // let target = Target::from_triple(&triple).unwrap();
+    let triple = TargetTriple::create("x86_64-pc-windows-msvc");
+    let target = Target::from_name("x86-64").unwrap();
+
     let machine = target
         .create_target_machine(
             &triple,
             "generic",
             "",
-            OptimizationLevel::Default,
+            OptimizationLevel::Aggressive,
             RelocMode::Default,
-            CodeModel::Default,
+            CodeModel::Small,
         )
         .unwrap();
 
